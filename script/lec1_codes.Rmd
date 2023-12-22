@@ -6,6 +6,292 @@ output: pdf_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE)
 ```
 
+## Load libraries
+
+```{r}
+library("knitr")          # knitting doc
+library("dplyr")          # data wrangling
+library("ggplot2")        # plotting data
+library("janitor")        # manage tables
+library("sf")             # spatial data
+library("rnaturalearth")  # spatial database
+```
+
+## Import Freedom House Data
+
+Here we import FH data from `/path/link/<data-file>`, drop the variable `Region_Code`, convert `Status`, `Region_Name` and `is_ldc` to factor data type, and keep observations corresponding to the year 2020.
+
+`select()`, `mutate()` and `filter()` are functions from the `ddplyr` package. To know more about a function, say `mutate()`, type `help("mutate")` or `?mutate()` in `R` console.
+
+```{r}
+path <- "https://raw.githubusercontent.com/subhamk/"
+link <- "ec122_share/main/data/"
+
+freedom <- readr::read_csv(paste0(path, link, "freedom.csv")) # import csv
+
+freedom_2020 <- freedom %>%
+  dplyr::select(-Region_Code) %>%           # drop Region_Code
+  mutate(Status = factor(Status),
+         Region_Name = factor(Region_Name),
+         is_ldc = factor(is_ldc)) %>%       # convert to factor
+  filter(year == 2020)                      # keep data for the year 2020
+
+head(freedom_2020)                          # print first few lines of the data
+```
+
+
+The function `glimpse()` provides a quick overview of the dataset.
+```{r, echo=TRUE}
+glimpse(freedom_2020)
+```
+
+## Cross Tables
+
+This tabulates the number of observations per cell where each cell is a combination of `Stutus` and `is_ldc`.
+
+```{r crosstabs}
+freedom_2020 %>% 
+  tabyl(is_ldc, Status) %>%             # create table
+  adorn_totals(c("row", "col")) %>%     # add row and col totals
+  kable()                               # print table
+```
+
+## Bar Chart
+
+The following code chunk plots a bar chart of average `CL` score by group `Status`. `summarise` creates a new data (`tibble` in tidy language) which contains the mean of `CL` and we name this `fh_ranking`.
+
+```{r barchart-data}
+fh_ranking <- freedom_2020 %>%          # use 2020 FH data
+  group_by(Status) %>%                  # group data by Status
+  summarise(mean_cl = mean(CL, na.rm = TRUE))   # calculate the mean by group var.
+fh_ranking
+```
+
+This reproduces the bar chart in the slides. We use `ggplot2` library to produce charts. Hadley Wickham's [ggplot2 book](ggplot2: Elegant Graphics for Data Analysis (3e)) is a detailed resource.
+```{r barchart-plot}
+ggplot(data = fh_ranking, aes(x = Status, y = mean_cl)) +
+  geom_bar(stat = 'identity',
+           fill = 'steelblue',
+           alpha = 0.6) +
+  geom_text(
+    aes(label = round(mean_cl, 2)),
+    colour = "black",
+    size = 3,
+    vjust = 1.5,
+    position = position_dodge(.9)
+  ) +
+  labs(
+    title = "Civil Liberty Rating by Status",
+    subtitle = "Note: Smaller CL values indicate fewer restrictions",
+    x = "Status",
+    y = "CL Rating"
+  ) +
+  theme_bw()
+```
+
+## Bar Chart with Multiple Groups
+
+Here, we calculate the mean by both `Status` and `is_ldc` and present data for each of the groups side by side. We construct a new variable `label_y` -- the cumulative sum of `mean_cl` -- which helps in placing the value labels in the stacked bar plot (next section) in the right place.
+
+```{r multibar-data}
+fh_ranking_m <- freedom_2020 %>%
+  group_by(Status, is_ldc) %>%          # group data
+  summarise(mean_cl = mean(CL, na.rm = TRUE)) %>%   # get averages
+  mutate(label_y = cumsum(mean_cl))     # cumulative sum
+fh_ranking_m
+```
+
+
+This reproduces multiple bar plot in the slides.
+```{r multibar-plot}
+ggplot(data = fh_ranking_m, aes(x = Status, y = mean_cl, fill = is_ldc)) +
+  geom_bar(stat = 'identity', position = position_dodge()) +
+  scale_fill_brewer(palette = "Blues") +
+  geom_text(
+    aes(label = round(mean_cl, 2)),
+    colour = "black",
+    size = 3,
+    vjust = 1.5,
+    position = position_dodge(.9)
+  ) +
+  labs(
+    title = "Civil Liberty Rating by LDC and Status",
+    subtitle = "Note: Smaller values indicate fewer constraints",
+    x = "Status",
+    y = "CL Rating"
+  ) +
+  theme_bw()
+```
+
+## Stacked Bar Chart
+
+We stack the bars instead of presenting them side by side. This is particularly useful when there are several categories for a variable of interest.
+```{r stacked-barplot}
+ggplot(data = fh_ranking_m, aes(x = Status, y = mean_cl, fill = is_ldc)) +
+  geom_bar(stat = 'identity') +
+  scale_fill_brewer(palette = "Blues") +
+  geom_text(
+    aes(y = label_y, label = round(mean_cl, 2)),
+    colour = "black",
+    size = 3,
+    vjust = 1.5
+  ) +
+  labs(
+    title = "Civil Liberty Rating by LDC and Status",
+    subtitle = "Note: Smaller value indicates fewer constraints",
+    x = "Status",
+    y = "CL Rating"
+  ) +
+  theme_bw()
+```
+
+## Stacked Bar Chart - Proportional
+
+We could stack proportions instead.
+```{r stackedprop}
+ggplot(data = fh_ranking_m, aes(x = Status, y = mean_cl, fill = is_ldc)) +
+  geom_col(position = "fill") +
+  scale_fill_brewer(palette = "Blues") +
+  labs(
+    title = "Civil Liberty Rating by LDC and Status",
+    subtitle = "Note: Smaller value indicates fewer constraints",
+    x = "Status",
+    y = "CL Rating"
+  ) +
+  theme_bw()
+```
+
+## Pie Chart
+
+```{r pie-data}
+dat <- freedom_2020 %>%
+  janitor::tabyl(Status) %>%    # creates a table
+  arrange(desc(n))              # descending order 
+dat
+```
+
+```{r pie, fig.align='center', out.width="60%"}
+ggplot(dat, aes(x = "", y = percent, fill = Status)) +
+  geom_bar(stat = "identity",
+           width = 1,
+           alpha = 0.6) +
+  coord_polar("y", start = 0) +
+  theme_void()
+```
+
+## Merging data
+
+First, we load PWT 10.1 and name this data object `pwt`. We then create a new data object `pwt_1` which subsets `pwt` to keep only GDP data for the year 2010.  
+
+```{r, echo=TRUE}
+pwt <- readr::read_csv(paste0(path, link, "pwt1001.csv"))
+pwt_1 <- pwt %>% 
+  filter(year == 2010) %>% 
+  dplyr::select(countrycode, country, rgdpo)
+
+head(pwt_1)
+```
+
+We then merge FH data with GDP data based on `country` (country names). We drop observations where `rgdpo` are missing (indicated by `NA` in `R`) and then take the log of GDP (`log_rgdpo`).
+```{r, echo=TRUE}
+freedom_gdp <- freedom_2020 %>% 
+  dplyr::left_join(pwt_1, by = join_by(country)) %>% 
+  tidyr::drop_na(rgdpo) %>% 
+  mutate(log_rgdpo = log(rgdpo))
+head(freedom_gdp)
+```
+
+## Histogram
+
+The code plots the distribution of log GDP for the year 2010 across all the countries in our sample. We specify the breaks in `br`.
+```{r hist, echo=TRUE}
+br <- c(7, 9, 10, 12, 14, 16, 18)        # specify breaks for histogram
+
+ggplot(data = freedom_gdp, aes(x = log_rgdpo, stat(density))) +
+  geom_histogram(breaks = br,
+                 fill = 'steelblue',
+                 alpha = 0.6) +
+  ylim(0, 0.2) +
+  labs(
+    title = 'Histogram of log GDP',
+    subtitle = 'User supplied bin width',
+    x = 'log GDP',
+    y = 'RFD'
+  ) +
+  theme_bw()
+```
+
+## Histogram - Automatic bin selection
+
+Here, we plot the distribution of `log_rgdpo` but allow `R` to automatically select bin size. This results in a more elegant plot.
+
+```{r, echo=TRUE}
+ggplot(data = freedom_gdp, aes(x = log_rgdpo, y = stat(density))) +
+  geom_histogram(fill = 'steelblue', alpha = 0.6) +
+  labs(
+    title = 'Distribution of Real GDP in PPP',
+    subtitle = 'Data source: PWT 10.01',
+    x = 'log GDP',
+    y = 'Count'
+  ) +
+  theme_bw()
+```
+
+
+## Time Series Plot
+
+We might be interested in how a variable evolves over time. Suppose we are interested in how the UK economy has grown over time.
+
+To do this, we start with `pwt` data object, subset observations corresponding to the UK, select the variables `year` and `rgdpo` that are of interest. Note that `rgdpo` is in chained PPP. We then create a new variable `log_gdp` which log transforms real UK GDP.
+
+```{r}
+uk_gdp <- pwt %>% 
+  filter(countrycode == "GBR") %>% 
+  dplyr::select(year, rgdpo) %>% 
+  mutate(log_gdp = log(rgdpo))
+head(uk_gdp)
+```
+
+
+We then plot `log_gdp` against `year` to show how the UK economy has grown over time.
+```{r tsplot}
+ggplot(data = uk_gdp, aes(x = year, y = log_gdp)) +
+  geom_line(linewidth = 2, col = 'steelblue') +
+  labs(title = 'UK GDP chained PPP',
+       x = 'Year',
+       y = "GDP (in logs)") +
+  theme_bw()
+```
+
+
+## Geo-spatial data
+
+`R` has advanced features to deal with spatial data. We obtain the map of the world from naturalearth, merge `fh_ranking_2020` to get the civil liberty scores by country and plot it on a map.
+
+```{r}
+world <- ne_countries(scale = "medium", returnclass = "sf")
+
+fh_ranking_2020 <- freedom_2020 %>%
+  mutate(
+    country = replace(
+      country,
+      country == "United Kingdom of Great Britain and Northern Ireland",
+      "United Kingdom"
+    )
+  ) %>%
+  dplyr::select(CL, PR, country)
+
+world <- world %>%
+  left_join(fh_ranking_2020, by = join_by(geounit == country))
+```
+
+```{r}
+ggplot(data = world) +
+  geom_sf(aes(fill = factor(CL))) +
+  labs(title = 'Civil Liberty Ranking in 2020',
+       subtitle = 'Smaller score indicates fewer constraints') +
+  theme_bw()
+```
